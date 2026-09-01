@@ -282,6 +282,83 @@ body {
     transform: translateY(0) scale(1);
   }
 }
+@keyframes recoil-kick {
+  0% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+  22% {
+    transform: translate(8px, 3px) rotate(1.8deg);
+  }
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+}
+@keyframes muzzle-pop {
+  0% {
+    opacity: 1;
+    transform: scale(0.35);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+}
+@keyframes warn-border {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 6px rgba(255, 45, 85, 0.5));
+  }
+  50% {
+    filter: drop-shadow(0 0 20px rgba(255, 45, 85, 0.95));
+  }
+}
+@keyframes hitflash-k {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes led-blink {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 9px #ff2d55;
+  }
+  50% {
+    opacity: 0.35;
+    box-shadow: 0 0 2px #ff2d55;
+  }
+}
+
+.anim-recoil {
+  animation: recoil-kick 0.34s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+.anim-muzzle {
+  animation: muzzle-pop 0.3s ease-out both;
+}
+.atk-warn {
+  animation: warn-border 0.38s ease-in-out infinite;
+}
+.anim-hitflash {
+  animation: hitflash-k 0.45s ease-out both;
+}
+.anim-led {
+  animation: led-blink 1s steps(2) infinite;
+}
+
+/* CRT-телек для радио */
+.crt::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.22) 0 1px, transparent 1px 3px),
+    radial-gradient(circle at 50% 42%, transparent 52%, rgba(0, 0, 0, 0.45) 100%);
+}
 
 .anim-bg-breathe {
   animation: bg-breathe 34s ease-in-out infinite alternate;

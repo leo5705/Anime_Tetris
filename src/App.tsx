@@ -13,6 +13,46 @@ const BG_URL =
   "https://image.qwenlm.ai/generated-images/0997e841-3761-4c89-b7c0-bdd03f0b82e8/_result.png";
 const MASCOT_URL =
   "https://image.qwenlm.ai/generated-images/4a777d6a-ee03-4e49-8d37-8efca35d28cc/_result.png";
+const SHOOTER_URL =
+  "https://image.qwenlm.ai/generated-images/35c2c050-3ff0-4d5d-8f66-a299ec987f96/_result.png";
+
+const YT_VIDEO_ID = "J7NFL-eOxiQ"; // VILLIAN, madk1d — «Династия»
+
+/* ================= YouTube IFrame API (радио) ================= */
+
+type YTPlayer = {
+  playVideo: () => void;
+  pauseVideo: () => void;
+  setVolume: (v: number) => void;
+  destroy: () => void;
+};
+declare global {
+  interface Window {
+    YT?: { Player: new (el: HTMLElement, opts: unknown) => YTPlayer };
+    onYouTubeIframeAPIReady?: () => void;
+  }
+}
+let ytApiPromise: Promise<void> | null = null;
+function ensureYtApi(): Promise<void> {
+  if (ytApiPromise) return ytApiPromise;
+  ytApiPromise = new Promise((resolve) => {
+    if (window.YT?.Player) {
+      resolve();
+      return;
+    }
+    const prev = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => {
+      prev?.();
+      resolve();
+    };
+    const s = document.createElement("script");
+    s.src = "https://www.youtube.com/iframe_api";
+    s.async = true;
+    document.head.appendChild(s);
+    window.setTimeout(resolve, 7000);
+  });
+  return ytApiPromise;
+}
 
 /* ================= small building blocks ================= */
 
@@ -190,6 +230,34 @@ function IconSound({ off }: { off: boolean }) {
     </svg>
   );
 }
+function IconChipMusic() {
+  return (
+    <svg className={ic} width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path d="M6 12.5V3l7-1.5V10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="4" cy="12.5" r="2" fill="currentColor" />
+      <circle cx="11" cy="10" r="2" fill="currentColor" />
+    </svg>
+  );
+}
+function IconRadioWave() {
+  return (
+    <svg className={ic} width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor">
+      <circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none" />
+      <path d="M5.2 10.8a4 4 0 0 1 0-5.6M10.8 5.2a4 4 0 0 1 0 5.6" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M3 13a7 7 0 0 1 0-10M13 3a7 7 0 0 1 0 10" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+function IconMusicOff() {
+  return (
+    <svg className={ic} width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path d="M6 12.5V3l7-1.5V10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="4" cy="12.5" r="2" fill="currentColor" />
+      <circle cx="11" cy="10" r="2" fill="currentColor" />
+      <path d="M2 2l12 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 const fmtTime = (t: number) => {
   const m = Math.floor(t / 60);
@@ -230,6 +298,7 @@ export default function App() {
     phase: "menu",
     hold: null,
     next: [],
+    hits: 0,
   });
   const [excls, setExcls] = useState<Excl[]>([]);
   const [bubble, setBubble] = useState({ jp: "よろしくね！", ru: "Рада видеть!", key: 0 });
@@ -237,6 +306,21 @@ export default function App() {
   const [muted, setMuted] = useState(false);
   const [newRecord, setNewRecord] = useState(false);
   const [time, setTime] = useState(0);
+  const [aiming, setAiming] = useState(false);
+  const [shooterFx, setShooterFx] = useState(0);
+  const [hitFx, setHitFx] = useState(0);
+  const [musicMode, setMusicMode] = useState<"chip" | "radio" | "off">(() => {
+    try {
+      const v = localStorage.getItem("anime-tetris-music");
+      if (v === "radio" || v === "off" || v === "chip") return v;
+    } catch {
+      /* ignore */
+    }
+    return "chip";
+  });
+  const [radioPlaying, setRadioPlaying] = useState(false);
+  const ytPlayerRef = useRef<YTPlayer | null>(null);
+  const radioWrapRef = useRef<HTMLDivElement>(null);
 
   const say = useCallback((jp: string, ru: string) => {
     setBubble((b) => ({ jp, ru, key: b.key + 1 }));
@@ -262,6 +346,7 @@ export default function App() {
         case "start":
           bestAtStartRef.current = gameRef.current?.best ?? 0;
           setNewRecord(false);
+          setAiming(false);
           say("レッツゴー！", "Поехали!");
           break;
         case "clear": {
@@ -312,6 +397,24 @@ export default function App() {
           break;
         case "resume":
           say("さいかい！", "Продолжаем!");
+          break;
+        case "attack-warn":
+          setAiming(true);
+          say("ねらわれてる！", "Снайпер-тян целится!");
+          break;
+        case "attack-shot":
+          setAiming(false);
+          setShooterFx((k) => k + 1);
+          break;
+        case "attack-hit":
+          setHitFx((k) => k + 1);
+          pushExcl("БАМ!", "ひっ! Попала!", "text-[#ff5c7a]");
+          say("当たった♡", "Попала! Ай-яй!");
+          domShake();
+          break;
+        case "attack-miss":
+          pushExcl("ПРОМАХ!", "ハズレ~", "text-[#7ef0ff]");
+          say("ざんねん~", "Уф, промахнулась!");
           break;
         case "harddrop":
           break;
@@ -424,6 +527,14 @@ export default function App() {
       document.removeEventListener("visibilitychange", onBlur);
       game.destroy();
       gameRef.current = null;
+      if (ytPlayerRef.current) {
+        try {
+          ytPlayerRef.current.destroy();
+        } catch {
+          /* ignore */
+        }
+        ytPlayerRef.current = null;
+      }
     };
   }, []);
 
@@ -433,6 +544,11 @@ export default function App() {
     audio.setMuted(next);
     setMuted(next);
     try {
+      if (ytPlayerRef.current) ytPlayerRef.current.setVolume(next ? 0 : 70);
+    } catch {
+      /* ignore */
+    }
+    try {
       localStorage.setItem("anime-tetris-muted", next ? "1" : "0");
     } catch {
       /* ignore */
@@ -440,6 +556,93 @@ export default function App() {
   }, []);
   const toggleMuteRef = useRef(toggleMute);
   toggleMuteRef.current = toggleMute;
+
+  /* ---- музыкальный режим: чиптюн / радио (YouTube) / выкл ---- */
+  const cycleMusic = useCallback(() => {
+    setMusicMode((m) => {
+      const next = m === "chip" ? "radio" : m === "radio" ? "off" : "chip";
+      try {
+        localStorage.setItem("anime-tetris-music", next);
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    audio.musicEnabled = musicMode === "chip";
+    if (musicMode !== "radio") {
+      if (ytPlayerRef.current) {
+        try {
+          ytPlayerRef.current.pauseVideo();
+        } catch {
+          /* ignore */
+        }
+      }
+      setRadioPlaying(false);
+      audio.stopMusic();
+      if (musicMode === "chip" && gameRef.current && gameRef.current.phase === "playing") {
+        audio.startMusic();
+      }
+      return;
+    }
+    // radio
+    audio.stopMusic();
+    let cancelled = false;
+    ensureYtApi().then(() => {
+      if (cancelled || !window.YT?.Player || !radioWrapRef.current) return;
+      if (ytPlayerRef.current) {
+        try {
+          ytPlayerRef.current.playVideo();
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      radioWrapRef.current.innerHTML = "";
+      const host = document.createElement("div");
+      host.style.height = "100%";
+      radioWrapRef.current.appendChild(host);
+      ytPlayerRef.current = new window.YT.Player(host, {
+        width: "100%",
+        height: "100%",
+        videoId: YT_VIDEO_ID,
+        playerVars: {
+          autoplay: 1,
+          controls: 0,
+          rel: 0,
+          playsinline: 1,
+          iv_load_policy: 3,
+          fs: 0,
+          disablekb: 1,
+        },
+        events: {
+          onReady: (e: { target: YTPlayer }) => {
+            e.target.setVolume(audio.muted ? 0 : 70);
+            e.target.playVideo();
+          },
+          onStateChange: (e: { data: number; target: YTPlayer }) => {
+            if (e.data === 1) setRadioPlaying(true);
+            if (e.data === 2) setRadioPlaying(false);
+            if (e.data === 0) e.target.playVideo(); // зацикливаем трек
+          },
+        },
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [musicMode]);
+
+  const radioPlay = useCallback(() => {
+    audio.ensure();
+    try {
+      ytPlayerRef.current?.playVideo();
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   /* bubble auto-reset to idle */
   useEffect(() => {
@@ -500,6 +703,24 @@ export default function App() {
               <span className="font-jp text-[10px] text-[#ff9ecb]">ベスト</span>
               <span className="font-arcade text-[10px] text-[#ffe6a3]">{hud.best.toLocaleString("ru-RU")}</span>
             </div>
+            <button
+              onClick={cycleMusic}
+              className={
+                "clip-panel-sm flex items-center gap-2 bg-[#0d1334]/90 px-3 py-2.5 transition-colors " +
+                (musicMode === "radio"
+                  ? "text-[#ff5ca8] shadow-[0_0_14px_rgba(255,45,143,0.4)]"
+                  : musicMode === "chip"
+                    ? "text-[#2de2ff]"
+                    : "text-[#5b6aa8] hover:text-[#9fb0ff]")
+              }
+              aria-label="Режим музыки"
+              title="Музыка: чиптюн / радио / выкл"
+            >
+              {musicMode === "chip" ? <IconChipMusic /> : musicMode === "radio" ? <IconRadioWave /> : <IconMusicOff />}
+              <span className="font-arcade hidden text-[8px] tracking-[0.14em] md:inline">
+                {musicMode === "chip" ? "ЧИПТЮН" : musicMode === "radio" ? "РАДИО" : "МУЗ OFF"}
+              </span>
+            </button>
             {inGame && (
               <button
                 onClick={() => gameRef.current?.togglePause()}
@@ -599,6 +820,55 @@ export default function App() {
                 </li>
               </ul>
             </Panel>
+
+            {/* sniper girl */}
+            <div
+              className={
+                "clip-panel bg-gradient-to-b from-[#ff2d55] via-[#a02fd0]/60 to-[#ff8f2d] p-[1.5px] " +
+                (aiming ? "atk-warn" : "")
+              }
+            >
+              <div className="clip-panel relative bg-[#170d24]/95 p-2">
+                <div className="mb-1.5 flex items-baseline gap-1.5">
+                  <span className="font-jp text-[10px] leading-none text-[#ff8d8d]">スナイパー</span>
+                  <span className="font-arcade text-[8px] tracking-[0.18em] text-[#ffab7a]">DANGER</span>
+                  {aiming && (
+                    <span className="anim-blink font-arcade ml-auto text-[8px] text-[#ff2d55]">ЦЕЛИТСЯ!</span>
+                  )}
+                </div>
+                <div className="clip-panel-sm relative overflow-hidden">
+                  <img
+                    key={shooterFx}
+                    src={SHOOTER_URL}
+                    alt="Снайпер-тян"
+                    className={"block h-40 w-full object-cover object-top " + (shooterFx > 0 ? "anim-recoil" : "")}
+                    draggable={false}
+                  />
+                  {shooterFx > 0 && (
+                    <div className="pointer-events-none absolute" style={{ left: "4%", top: "36%" }}>
+                      <div
+                        key={"mz" + shooterFx}
+                        className="anim-muzzle h-16 w-16 -ml-8 -mt-8 rounded-full"
+                        style={{
+                          background:
+                            "radial-gradient(circle, rgba(255,244,190,0.95) 0%, rgba(255,150,60,0.6) 42%, transparent 68%)",
+                        }}
+                      />
+                    </div>
+                  )}
+                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#170d24] to-transparent pt-6" />
+                  <div className="absolute bottom-1.5 left-2 right-2 flex items-center justify-between">
+                    <span className="font-arcade text-[9px] text-white">СНАЙПЕР-ТЯН</span>
+                    <span className="font-jp text-[9px] text-[#ff8d8d]">敵・ВРАГ</span>
+                  </div>
+                </div>
+                <p className="mt-1.5 text-center text-[10px] font-semibold leading-snug text-[#c09ab4]">
+                  {aiming
+                    ? "УВОРАЧИВАЙСЯ! Жми SPACE — бросай фигуру!"
+                    : "Шальная пуля: иногда отстреливает блоки твоей фигуры"}
+                </p>
+              </div>
+            </div>
           </aside>
 
           {/* board */}
@@ -629,6 +899,12 @@ export default function App() {
                     style={{ height: "min(74vh, 620px)", width: "auto", aspectRatio: "1 / 2" }}
                   />
                   <div className="scanlines pointer-events-none absolute inset-0 z-10" />
+                  {hitFx > 0 && (
+                    <div
+                      key={hitFx}
+                      className="anim-hitflash pointer-events-none absolute inset-0 z-10 bg-[#ff2d55]/45"
+                    />
+                  )}
                   {/* exclamations layer */}
                   <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden">
                     {excls.map((e) => (
@@ -760,6 +1036,41 @@ export default function App() {
                 <p className="font-arcade text-[13px] text-[#39457f]">—</p>
               )}
             </Panel>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Panel jp="被弾" title="HITS">
+                <p className={"font-arcade text-[13px] " + (hud.hits > 0 ? "text-[#ff5c7a]" : "text-[#39457f]")}>
+                  {hud.hits}
+                </p>
+              </Panel>
+              {musicMode === "radio" ? (
+                <Panel jp="ラジオ" title="RADIO" bodyClass="pb-1.5">
+                  <div className="crt clip-panel-sm relative aspect-video w-full overflow-hidden bg-black">
+                    <div ref={radioWrapRef} className="absolute inset-0" />
+                    {!radioPlaying && (
+                      <button
+                        onClick={radioPlay}
+                        className="absolute inset-0 z-10 flex items-center justify-center gap-1.5 bg-[#05071a]/70 font-arcade text-[9px] tracking-[0.14em] text-white transition-colors hover:bg-[#05071a]/50"
+                      >
+                        <IconPlay /> ВКЛ
+                      </button>
+                    )}
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-1.5">
+                    <span className={"h-2 w-2 shrink-0 rounded-full bg-[#ff2d55] " + (radioPlaying ? "anim-led" : "opacity-40")} />
+                    <p className="min-w-0 truncate text-[9px] font-bold text-[#aebaf0]">
+                      ДИНАСТИЯ — VILLIAN, madk1d
+                    </p>
+                  </div>
+                </Panel>
+              ) : (
+                <Panel jp="音楽" title="MUSIC">
+                  <p className="text-[10px] font-semibold leading-snug text-[#5b6aa8]">
+                    {musicMode === "chip" ? "Чиптюн-опенинг играет" : "Музыка выключена"}
+                  </p>
+                </Panel>
+              )}
+            </div>
           </aside>
         </main>
       </div>
@@ -799,6 +1110,10 @@ export default function App() {
                 <span className="flex items-center gap-2"><Key k="▼" /> мягкий дроп</span>
                 <span className="flex items-center gap-2"><Key k="P" /> пауза</span>
               </div>
+
+              <p className="mt-4 inline-block clip-panel-sm bg-[#ff2d55]/12 px-3 py-1.5 text-[12px] font-semibold text-[#ff9d9d]">
+                Осторожно: Снайпер-тян палит по фигуре шальными пулями — уворачивайся или лови «БАМ!»
+              </p>
 
               {hud.best > 0 && (
                 <p className="mt-6 font-arcade text-[10px] tracking-[0.18em] text-[#8fa2ff]">
@@ -852,11 +1167,12 @@ export default function App() {
                   {hud.score.toLocaleString("ru-RU")}
                 </p>
 
-                <div className="mt-5 grid grid-cols-3 gap-2 text-center">
+                <div className="mt-5 grid grid-cols-4 gap-2 text-center">
                   {[
                     ["ライン", "ЛИНИИ", String(hud.lines)],
                     ["レベル", "УРОВЕНЬ", String(hud.level)],
                     ["時間", "ВРЕМЯ", fmtTime(time)],
+                    ["被弾", "ПОПАДАНИЯ", String(hud.hits)],
                   ].map(([jp, ru, v]) => (
                     <div key={ru} className="clip-panel-sm bg-[#141b46] px-2 py-2.5">
                       <p className="font-jp text-[9px] text-[#ff9ecb]">{jp}</p>

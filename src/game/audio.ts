@@ -32,6 +32,8 @@ class AudioEngine {
   private nextTime = 0;
   private step = 0;
   muted = false;
+  /** false, когда играет внешнее радио (YouTube) — чиптюн не стартует */
+  musicEnabled = true;
 
   ensure() {
     if (this.ctx) {
@@ -180,7 +182,7 @@ class AudioEngine {
   /* ---------------- music sequencer ---------------- */
   startMusic() {
     this.ensure();
-    if (!this.ctx || this.timer) return;
+    if (!this.ctx || this.timer || !this.musicEnabled) return;
     this.nextTime = this.ctx.currentTime + 0.08;
     this.step = 0;
     this.timer = setInterval(() => this.schedule(), 25);
@@ -304,6 +306,28 @@ class AudioEngine {
       this.tone({ f: mtof(m), dur: 0.3, type: "sawtooth", gain: 0.09, at: t0 + i * 0.18 })
     );
     this.tone({ f: mtof(41), f2: mtof(36), dur: 0.9, type: "sawtooth", gain: 0.08, at: t0 + 0.95 });
+  }
+
+  /* ---------------- снайпер-тян ---------------- */
+  sniperWarn() {
+    if (!this.ctx) return;
+    const t0 = this.ctx.currentTime;
+    [0, 0.18, 0.36].forEach((d, i) =>
+      this.tone({ f: 1180 + i * 160, dur: 0.07, type: "square", gain: 0.09, at: t0 + d })
+    );
+    this.tone({ f: 2300, f2: 320, dur: 0.5, type: "sawtooth", gain: 0.03, at: t0 + 0.4 });
+  }
+  sniperShot() {
+    this.noise({ dur: 0.14, gain: 0.36, lp: 1500 });
+    this.noise({ dur: 0.3, gain: 0.15, lp: 420 });
+    this.tone({ f: 130, f2: 40, dur: 0.22, type: "sine", gain: 0.38 });
+  }
+  sniperHit() {
+    this.tone({ f: 240, f2: 70, dur: 0.14, type: "square", gain: 0.15 });
+    this.noise({ dur: 0.1, gain: 0.18, bp: 900, bp2: 300 });
+  }
+  sniperMiss() {
+    this.noise({ dur: 0.22, gain: 0.07, bp: 3400, bp2: 700 });
   }
 }
 

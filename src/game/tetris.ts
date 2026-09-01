@@ -18,6 +18,7 @@ export interface HudData {
   phase: Phase;
   hold: PieceId | null;
   next: PieceId[];
+  hits: number;
 }
 
 export type GameEvent =
@@ -29,7 +30,11 @@ export type GameEvent =
   | { type: "gameover" }
   | { type: "pause" }
   | { type: "resume" }
-  | { type: "harddrop" };
+  | { type: "harddrop" }
+  | { type: "attack-warn" }
+  | { type: "attack-shot"; dir: 1 | -1 }
+  | { type: "attack-hit" }
+  | { type: "attack-miss" };
 
 export interface GameHooks {
   onHud: (h: HudData) => void;
@@ -88,6 +93,10 @@ function cw(m: number[][]): number[][] {
   const n = m.length;
   return m.map((row, y) => row.map((_, x) => m[n - 1 - x][y]));
 }
+function ccw(m: number[][]): number[][] {
+  const n = m.length;
+  return m.map((row, y) => row.map((_, x) => m[x][n - 1 - y]));
+}
 
 const ROTATIONS = {} as Record<PieceId, number[][][]>;
 (Object.keys(SHAPES) as PieceId[]).forEach((id) => {
@@ -128,7 +137,16 @@ interface Particle {
 }
 interface Floater { x: number; y: number; text: string; color: string; t: number; life: number; size: number }
 interface Flash { x: number; y: number; t: number }
-interface Cur { id: PieceId; rot: number; x: number; y: number }
+interface Cur { id: PieceId; rot: number; x: number; y: number; shape: number[][] }
+interface Attack {
+  phase: "idle" | "aim" | "fire";
+  t: number;
+  row: number;
+  bx: number;
+  dir: 1 | -1;
+  next: number;
+  dmg: number;
+}
 
 export class TetrisGame {
   phase: Phase = "menu";
@@ -158,6 +176,8 @@ export class TetrisGame {
   private floaters: Floater[] = [];
   private flashes: Flash[] = [];
   private shake = 0;
+  private hitsTaken = 0;
+  private atk: Attack = { phase: "idle", t: 0, row: 0, bx: 0, dir: 1, next: 12, dmg: 0 };
   private raf = 0;
   private last = 0;
   private sprites = new Map<string, HTMLCanvasElement>();
@@ -267,16 +287,15 @@ export class TetrisGame {
   }
 
   /* ---------------- helpers ---------------- */
-  private cells(id: PieceId, rot: number): [number, number][] {
-    const m = ROTATIONS[id][rot];
+  private cellsOf(shape: number[][]): [number, number][] {
     const out: [number, number][] = [];
-    for (let y = 0; y < m.length; y++)
-      for (let x = 0; x < m[y].length; x++) if (m[y][x]) out.push([x, y]);
+    for (let y = 0; y < shape.length; y++)
+      for (let x = 0; x < shape[y].length; x++) if (shape[y][x]) out.push([x, y]);
     return out;
   }
 
-  private collides(id: PieceId, rot: number, px: number, py: number): boolean {
-    for (const [cx, cy] of this.cells(id, rot)) {
+  private collides(shape: number[][], px: number, py: number): boolean {
+    for (const [cx, cy] of this.cellsOf(shape)) {
       const x = px + cx;
       const y = py + cy;
       if (x < 0 || x >= COLS || y >= TOTAL) return true;
@@ -300,7 +319,13 @@ export class TetrisGame {
 
   private spawn(id: PieceId): Cur {
     const n = SHAPES[id].length;
-    return { id, rot: 0, x: id === "O" ? 4 : Math.floor((COLS - n) / 2), y: 0 };
+    return {
+      id,
+      rot: 0,
+      x: id === "O" ? 4 : Math.floor((COLS - n) / 2),
+      y: 0,
+      shape: SHAPES[id].map((r) => [...r]),
+    };
   }
 
   private spawnNext() {
@@ -311,7 +336,7 @@ export class TetrisGame {
     this.lockTimer = 0;
     this.lockResets = 0;
     this.dropAcc = 0;
-    if (this.collides(id, 0, this.cur.x, this.cur.y)) {
+    if (this.collides(SHAPES[id], this.cur.x, this.cur.y)) {
       this.gameOver();
     }
     this.hud();
@@ -324,7 +349,7 @@ export class TetrisGame {
   private dropY(): number {
     if (!this.cur) return 0;
     let y = this.cur.y;
-    while (!this.collides(this.cur.id, this.cur.rot, this.cur.x, y + 1)) y++;
+    while (!this.collides(this.cur.shape, this.cur.x, y + 1)) y++;
     return y;
   }
 
@@ -338,6 +363,7 @@ export class TetrisGame {
       phase: this.phase,
       hold: this.hold,
       next: this.queue.slice(0, 3),
+      hits: this.hitsTaken,
     });
   }
 
@@ -365,6 +391,8 @@ export class TetrisGame {
     this.heldDirs = [];
     this.dasDir = 0;
     this.softHeld = false;
+    this.hitsTaken = 0;
+    this.atk = { phase: "idle", t: 0, row: 0, bx: 0, dir: 1, next: 12, dmg: 0 };
     this.phase = "playing";
     this.spawnNext();
     audio.ensure();
@@ -379,6 +407,10 @@ export class TetrisGame {
       this.phase = "paused";
       audio.stopMusic();
       audio.pause();
+      if (this.atk.phase !== "idle") {
+        this.atk.phase = "idle";
+        this.atk.next = this.time + 6;
+      }
       this.emit({ type: "pause" });
     } else if (this.phase === "paused") {
       this.phase = "playing";
@@ -414,7 +446,7 @@ export class TetrisGame {
 
   private move(d: number) {
     if (!this.cur || this.clearing) return;
-    if (!this.collides(this.cur.id, this.cur.rot, this.cur.x + d, this.cur.y)) {
+    if (!this.collides(this.cur.shape, this.cur.x + d, this.cur.y)) {
       this.cur.x += d;
       audio.move();
       this.resetLock();
@@ -425,11 +457,12 @@ export class TetrisGame {
     if (this.phase !== "playing" || !this.cur || this.clearing) return;
     const { id, rot, x, y } = this.cur;
     const to = (rot + dir + 4) % 4;
+    const ns = dir === 1 ? cw(this.cur.shape) : ccw(this.cur.shape);
     const table = id === "I" ? KICKS_I : KICKS_JLSTZ;
     const kicks = id === "O" ? ([[0, 0]] as Kick[]) : table[`${rot}>${to}`] || [[0, 0] as Kick];
     for (const [kx, ky] of kicks) {
-      if (!this.collides(id, to, x + kx, y + ky)) {
-        this.cur = { id, rot: to, x: x + kx, y: y + ky };
+      if (!this.collides(ns, x + kx, y + ky)) {
+        this.cur = { id, rot: to, x: x + kx, y: y + ky, shape: ns };
         audio.rotate();
         this.resetLock();
         this.burstAtPiece(3, COLORS[id].m, 1.2);
@@ -473,7 +506,7 @@ export class TetrisGame {
   }
 
   private resetLock() {
-    if (this.lockResets < 15 && this.cur && this.collides(this.cur.id, this.cur.rot, this.cur.x, this.cur.y + 1)) {
+    if (this.lockResets < 15 && this.cur && this.collides(this.cur.shape, this.cur.x, this.cur.y + 1)) {
       this.lockTimer = 0;
       this.lockResets++;
     }
@@ -482,9 +515,9 @@ export class TetrisGame {
   /* ---------------- core flow ---------------- */
   private lockPiece() {
     if (!this.cur) return;
-    const { id, rot, x, y } = this.cur;
+    const { id, x, y } = this.cur;
     let topOut = false;
-    for (const [cx, cy] of this.cells(id, rot)) {
+    for (const [cx, cy] of this.cellsOf(this.cur.shape)) {
       const gy = y + cy;
       const gx = x + cx;
       if (gy < 0) continue;
@@ -562,6 +595,7 @@ export class TetrisGame {
     this.phase = "gameover";
     this.cur = null;
     this.clearing = null;
+    this.atk.phase = "idle";
     audio.stopMusic();
     audio.gameover();
     this.shake = 14;
@@ -603,7 +637,7 @@ export class TetrisGame {
 
   private burstAtPiece(n: number, color: string, power: number) {
     if (!this.cur) return;
-    for (const [cx, cy] of this.cells(this.cur.id, this.cur.rot)) {
+    for (const [cx, cy] of this.cellsOf(this.cur.shape)) {
       const gy = this.cur.y + cy - HIDDEN;
       if (gy < 0) continue;
       for (let i = 0; i < n / 2; i++) {
@@ -614,6 +648,163 @@ export class TetrisGame {
 
   private addFloater(x: number, y: number, text: string, color: string, size: number) {
     this.floaters.push({ x, y, text, color, t: 0, life: 1.1, size });
+  }
+
+  /* ---------------- sniper attacks (анимешки палят по фигуре) ---------------- */
+  private pieceCenter(): { vx: number; vy: number } | null {
+    if (!this.cur) return null;
+    const cells = this.cellsOf(this.cur.shape);
+    if (!cells.length) return null;
+    let sx = 0;
+    let sy = 0;
+    for (const [cx, cy] of cells) {
+      sx += this.cur.x + cx + 0.5;
+      sy += this.cur.y + cy - HIDDEN + 0.5;
+    }
+    return { vx: sx / cells.length, vy: sy / cells.length };
+  }
+
+  private updateAttack(dt: number) {
+    const atk = this.atk;
+    if (atk.phase === "idle") {
+      if (this.cur && !this.clearing && this.time >= atk.next) {
+        atk.phase = "aim";
+        atk.t = 0;
+        atk.dir = Math.random() < 0.5 ? 1 : -1;
+        audio.sniperWarn();
+        this.emit({ type: "attack-warn" });
+      }
+      return;
+    }
+    atk.t += dt;
+    if (atk.phase === "aim") {
+      if (atk.t >= 0.85) {
+        atk.phase = "fire";
+        atk.t = 0;
+        atk.dmg = 0;
+        const c = this.pieceCenter();
+        atk.row = c ? Math.max(0, Math.min(ROWS - 1, Math.round(c.vy - 0.5))) : 10;
+        atk.bx = atk.dir === 1 ? -1.8 : COLS + 1.8;
+        audio.sniperShot();
+        this.shake = Math.max(this.shake, 6);
+        this.emit({ type: "attack-shot", dir: atk.dir });
+      }
+      return;
+    }
+    // fire: bullet flies across the locked row
+    atk.bx += atk.dir * 62 * dt;
+    if (this.cur && atk.dmg < 2) {
+      for (const [cx, cy] of this.cellsOf(this.cur.shape)) {
+        const gx = this.cur.x + cx;
+        const gy = this.cur.y + cy;
+        if (gy - HIDDEN === atk.row && Math.abs(gx + 0.5 - atk.bx) < 0.55) {
+          this.cur.shape[cy][cx] = 0;
+          atk.dmg++;
+          this.hitsTaken++;
+          this.shake = Math.max(this.shake, 12);
+          audio.sniperHit();
+          const px = gx * CELL + CELL / 2;
+          const py = (gy - HIDDEN) * CELL + CELL / 2;
+          for (let i = 0; i < 14; i++) {
+            this.spawnParticle(px, py, i % 3 ? "#ff5c7a" : "#ffd166", 2.4);
+          }
+          this.addFloater(px, py - 12, "БАМ!", "#ff5c7a", 18);
+          this.emit({ type: "attack-hit" });
+          this.hud();
+          break;
+        }
+      }
+    }
+    if ((atk.dir === 1 && atk.bx > COLS + 2.2) || (atk.dir === -1 && atk.bx < -2.2)) {
+      const missed = atk.dmg === 0;
+      atk.phase = "idle";
+      atk.next = this.time + Math.max(9, 13 + Math.random() * 13 - this.level * 0.6);
+      if (missed) {
+        audio.sniperMiss();
+        this.emit({ type: "attack-miss" });
+      }
+    }
+  }
+
+  private drawAttack(g: CanvasRenderingContext2D, now: number, W: number) {
+    const atk = this.atk;
+    const H = ROWS * CELL;
+    if (atk.phase === "aim") {
+      const c = this.pieceCenter();
+      if (!c) return;
+      const px = c.vx * CELL;
+      const py = c.vy * CELL;
+      const pulse = 0.5 + 0.5 * Math.sin(now / 70);
+      // laser line preview
+      g.save();
+      g.globalAlpha = 0.14 + 0.12 * pulse;
+      g.fillStyle = "#ff2d55";
+      g.fillRect(0, py - 2, W, 4);
+      g.restore();
+      // crosshair
+      g.save();
+      g.strokeStyle = "#ff2d55";
+      g.lineWidth = 2.4;
+      g.globalAlpha = 0.7 + 0.3 * pulse;
+      const r = CELL * 1.05 + pulse * 4;
+      g.beginPath();
+      g.arc(px, py, r, 0, Math.PI * 2);
+      g.stroke();
+      g.beginPath();
+      const dirs: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      for (const [dx, dy] of dirs) {
+        g.moveTo(px + dx * (r - 6), py + dy * (r - 6));
+        g.lineTo(px + dx * (r + 9), py + dy * (r + 9));
+      }
+      g.stroke();
+      // marker
+      g.fillStyle = "#ff2d55";
+      g.font = '900 24px "Exo 2", sans-serif';
+      g.textAlign = "center";
+      g.fillText("!", px, py - r - 8);
+      g.restore();
+      // red warning frame
+      g.save();
+      g.strokeStyle = `rgba(255,45,85,${(0.25 + 0.35 * pulse).toFixed(3)})`;
+      g.lineWidth = 3;
+      g.strokeRect(1.5, 1.5, W - 3, H - 3);
+      g.restore();
+    } else if (atk.phase === "fire") {
+      const py = (atk.row + 0.5) * CELL;
+      const head = atk.bx * CELL;
+      const tail = head - atk.dir * CELL * 2.6;
+      // muzzle flash
+      if (atk.t < 0.08) {
+        const mx = atk.dir === 1 ? 4 : W - 4;
+        const k = 1 - atk.t / 0.08;
+        g.save();
+        g.globalAlpha = k;
+        g.fillStyle = "#ffe9a8";
+        g.beginPath();
+        g.arc(mx, py, 18 * k + 6, 0, Math.PI * 2);
+        g.fill();
+        g.fillStyle = "#ffffff";
+        g.beginPath();
+        g.arc(mx, py, 9 * k + 3, 0, Math.PI * 2);
+        g.fill();
+        g.restore();
+      }
+      // tracer
+      g.save();
+      g.globalCompositeOperation = "lighter";
+      const grad = g.createLinearGradient(tail, 0, head, 0);
+      grad.addColorStop(0, "rgba(255,92,122,0)");
+      grad.addColorStop(0.7, "rgba(255,92,122,0.85)");
+      grad.addColorStop(1, "rgba(255,255,255,0.95)");
+      g.strokeStyle = grad;
+      g.lineWidth = 5;
+      g.lineCap = "round";
+      g.beginPath();
+      g.moveTo(tail, py);
+      g.lineTo(head, py);
+      g.stroke();
+      g.restore();
+    }
   }
 
   /* ---------------- update ---------------- */
@@ -646,7 +837,7 @@ export class TetrisGame {
         this.dropAcc += dt * 1000;
         if (this.dropAcc >= iv) {
           this.dropAcc = 0;
-          if (!this.collides(this.cur.id, this.cur.rot, this.cur.x, this.cur.y + 1)) {
+          if (!this.collides(this.cur.shape, this.cur.x, this.cur.y + 1)) {
             this.cur.y++;
             if (this.softHeld) {
               this.score += 1;
@@ -655,13 +846,14 @@ export class TetrisGame {
           }
         }
         // lock delay
-        if (this.collides(this.cur.id, this.cur.rot, this.cur.x, this.cur.y + 1)) {
+        if (this.collides(this.cur.shape, this.cur.x, this.cur.y + 1)) {
           this.lockTimer += dt * 1000;
           if (this.lockTimer >= 500) this.lockPiece();
         } else {
           this.lockTimer = 0;
         }
       }
+      this.updateAttack(dt);
     }
     // fx
     this.shake *= Math.pow(0.03, dt); // fast decay
@@ -765,7 +957,7 @@ export class TetrisGame {
     // column glow under current piece
     if (this.cur && !this.clearing) {
       const xs = new Set<number>();
-      for (const [cx] of this.cells(this.cur.id, this.cur.rot)) xs.add(this.cur.x + cx);
+      for (const [cx] of this.cellsOf(this.cur.shape)) xs.add(this.cur.x + cx);
       const colGrad = g.createLinearGradient(0, 0, 0, H);
       colGrad.addColorStop(0, "rgba(45,226,255,0)");
       colGrad.addColorStop(1, "rgba(45,226,255,0.07)");
@@ -817,7 +1009,7 @@ export class TetrisGame {
       if (gy > this.cur.y) {
         const sp = this.ghostSprite!;
         const c = COLORS[this.cur.id];
-        for (const [cx, cy] of this.cells(this.cur.id, this.cur.rot)) {
+        for (const [cx, cy] of this.cellsOf(this.cur.shape)) {
           const yy = gy + cy - HIDDEN;
           if (yy < 0) continue;
           g.globalAlpha = 0.5;
@@ -834,12 +1026,15 @@ export class TetrisGame {
     // current piece
     if (this.cur && (this.phase === "playing" || this.phase === "paused")) {
       const pulse = 1 + Math.sin(now / 240) * 0.04;
-      for (const [cx, cy] of this.cells(this.cur.id, this.cur.rot)) {
+      for (const [cx, cy] of this.cellsOf(this.cur.shape)) {
         const yy = this.cur.y + cy - HIDDEN;
         if (yy < 0) continue;
         this.drawSprite(this.cur.id, this.cur.x + cx, yy, 1, pulse);
       }
     }
+
+    // sniper attack visuals
+    this.drawAttack(g, now, W);
 
     // particles
     for (const p of this.particles) {
