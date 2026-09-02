@@ -643,10 +643,10 @@ export class TetrisGame {
     return { x: sx / cs.length, y: Math.max(CELL, sy / cs.length) };
   }
 
-  triggerChaos() {
+  triggerChaos(duration?: number) {
     if (this.phase !== "playing") return;
     if (this.chaos <= 0) this.emit({ type: "chaos-start" });
-    this.chaos = 8;
+    this.chaos = duration ?? 8;
     this.shake = Math.max(this.shake, 15);
     audio.chaosStart();
   }
