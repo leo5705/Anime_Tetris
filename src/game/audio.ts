@@ -205,7 +205,6 @@ class AudioEngine {
   }
 
   private playStep(s: number, t: number) {
-    // lead
     const mel = MELODY.find((m) => m[0] === s);
     if (mel) {
       this.tone({
@@ -217,7 +216,6 @@ class AudioEngine {
         echo: true,
       });
     }
-    // bass on 8ths
     if (s % 2 === 0) {
       const bar = Math.floor(s / 16);
       const root = BASS_ROOTS[bar];
@@ -231,7 +229,6 @@ class AudioEngine {
         bus: this.musicBus,
       });
     }
-    // drums
     if (s % 4 === 0) {
       this.tone({ f: 150, f2: 44, dur: 0.11, type: "sine", gain: 0.5, at: t, bus: this.musicBus });
     }
@@ -244,7 +241,6 @@ class AudioEngine {
     if (s % 16 === 14) {
       this.noise({ dur: 0.16, gain: 0.05, hp: 6500, at: t, bus: this.musicBus });
     }
-    // pad chord
     if (s % 16 === 0) {
       const bar = Math.floor(s / 16);
       CHORDS[bar].forEach((m) =>
@@ -328,6 +324,31 @@ class AudioEngine {
   }
   sniperMiss() {
     this.noise({ dur: 0.22, gain: 0.07, bp: 3400, bp2: 700 });
+  }
+
+  /* ---------------- безумие на дропе ---------------- */
+  chaosStart() {
+    if (!this.ctx) return;
+    const t0 = this.ctx.currentTime;
+    // air horn ×3
+    [0, 0.3, 0.6].forEach((d) => {
+      this.tone({ f: 440, dur: 0.26, type: "sawtooth", gain: 0.11, at: t0 + d });
+      this.tone({ f: 445, dur: 0.26, type: "sawtooth", gain: 0.09, at: t0 + d });
+      this.tone({ f: 554, dur: 0.26, type: "square", gain: 0.05, at: t0 + d });
+    });
+    // рокот вулкана
+    this.noise({ dur: 2.6, gain: 0.22, lp: 130 });
+    this.noise({ dur: 1.4, gain: 0.12, bp: 80, bp2: 420 });
+    // сирена
+    this.tone({ f: 280, f2: 940, dur: 0.9, type: "square", gain: 0.045, at: t0 + 1.0 });
+    this.tone({ f: 940, f2: 280, dur: 0.9, type: "square", gain: 0.045, at: t0 + 1.9 });
+  }
+  rockThud() {
+    this.noise({ dur: 0.09, gain: 0.15, lp: 430 });
+    this.tone({ f: 95, f2: 42, dur: 0.1, type: "sine", gain: 0.17 });
+  }
+  thunder() {
+    this.noise({ dur: 0.5, gain: 0.1, lp: 300 });
   }
 }
 

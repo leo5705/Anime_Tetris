@@ -30,11 +30,13 @@ export type GameEvent =
   | { type: "gameover" }
   | { type: "pause" }
   | { type: "resume" }
-  | { type: "harddrop" }
   | { type: "attack-warn" }
-  | { type: "attack-shot"; dir: 1 | -1 }
+  | { type: "attack-shot" }
   | { type: "attack-hit" }
-  | { type: "attack-miss" };
+  | { type: "attack-miss" }
+  | { type: "chaos-start" }
+  | { type: "chaos-end" }
+  | { type: "harddrop" };
 
 export interface GameHooks {
   onHud: (h: HudData) => void;
@@ -147,6 +149,8 @@ interface Attack {
   next: number;
   dmg: number;
 }
+interface Rock { x: number; y: number; vy: number; vr: number; rot: number; size: number }
+interface LavaDrop { x: number; y: number; vy: number }
 
 export class TetrisGame {
   phase: Phase = "menu";
@@ -156,6 +160,7 @@ export class TetrisGame {
   combo = -1;
   best = 0;
   hold: PieceId | null = null;
+  private hitsTaken = 0;
 
   private grid: (PieceId | 0)[][] = [];
   private cur: Cur | null = null;
@@ -176,8 +181,16 @@ export class TetrisGame {
   private floaters: Floater[] = [];
   private flashes: Flash[] = [];
   private shake = 0;
-  private hitsTaken = 0;
   private atk: Attack = { phase: "idle", t: 0, row: 0, bx: 0, dir: 1, next: 12, dmg: 0 };
+  /* --- хаос дропа --- */
+  private chaos = 0;
+  private chaosRockAcc = 0;
+  private chaosLavaAcc = 0;
+  private lightning = 0;
+  private rainbowT = 0;
+  private rocks: Rock[] = [];
+  private lava: LavaDrop[] = [];
+
   private raf = 0;
   private last = 0;
   private sprites = new Map<string, HTMLCanvasElement>();
@@ -233,14 +246,12 @@ export class TetrisGame {
       const g = sp.getContext("2d")!;
       g.scale(this.dpr, this.dpr);
       const o = pad;
-      // glow pass
       g.shadowColor = c.g;
       g.shadowBlur = 9;
       g.fillStyle = c.m;
       this.rr(g, o + 1.5, o + 1.5, CELL - 3, CELL - 3, 5);
       g.fill();
       g.shadowBlur = 0;
-      // body gradient
       const grad = g.createLinearGradient(0, o, 0, o + CELL);
       grad.addColorStop(0, c.l);
       grad.addColorStop(0.35, c.m);
@@ -248,11 +259,9 @@ export class TetrisGame {
       g.fillStyle = grad;
       this.rr(g, o + 1.5, o + 1.5, CELL - 3, CELL - 3, 5);
       g.fill();
-      // gloss
       g.fillStyle = "rgba(255,255,255,0.4)";
       this.rr(g, o + 4, o + 3.5, CELL - 8, 7, 3.5);
       g.fill();
-      // inner rim
       g.strokeStyle = "rgba(255,255,255,0.28)";
       g.lineWidth = 1.2;
       this.rr(g, o + 3, o + 3, CELL - 6, CELL - 6, 4);
@@ -262,7 +271,6 @@ export class TetrisGame {
       g.stroke();
       this.sprites.set(id, sp);
     });
-    // ghost sprite
     const sp = document.createElement("canvas");
     sp.width = S;
     sp.height = S;
@@ -393,6 +401,10 @@ export class TetrisGame {
     this.softHeld = false;
     this.hitsTaken = 0;
     this.atk = { phase: "idle", t: 0, row: 0, bx: 0, dir: 1, next: 12, dmg: 0 };
+    this.chaos = 0;
+    this.rocks = [];
+    this.lava = [];
+    this.lightning = 0;
     this.phase = "playing";
     this.spawnNext();
     audio.ensure();
@@ -475,7 +487,7 @@ export class TetrisGame {
     if (this.phase !== "playing" || !this.cur || this.clearing) return;
     const dist = this.dropY() - this.cur.y;
     this.cur.y = this.dropY();
-    this.score += dist * 2;
+    this.score += dist * 2 * (this.chaos > 0 ? 2 : 1);
     audio.hard();
     this.shake = Math.max(this.shake, 9);
     this.burstAtPiece(14, "#ffffff", 2.2);
@@ -541,13 +553,13 @@ export class TetrisGame {
     if (full.length > 0) {
       this.combo++;
       const n = full.length;
-      const gained = BASE_SCORE[n] * this.level + (this.combo > 0 ? 50 * this.combo * this.level : 0);
+      const mult = this.chaos > 0 ? 2 : 1;
+      const gained = (BASE_SCORE[n] * this.level + (this.combo > 0 ? 50 * this.combo * this.level : 0)) * mult;
       this.score += gained;
       this.lines += n;
       this.clearing = { rows: full, t: 0 };
       audio.clear(n, this.combo);
       this.shake = Math.max(this.shake, n >= 4 ? 15 : 5 + n);
-      // particles from cleared rows
       for (const row of full) {
         const vy = row - HIDDEN;
         for (let cx = 0; cx < COLS; cx++) {
@@ -563,7 +575,7 @@ export class TetrisGame {
         COLS * CELL * 0.5,
         (full[0] - HIDDEN) * CELL,
         `+${gained}`,
-        n >= 4 ? "#ffd166" : "#7ef0ff",
+        mult > 1 ? "#ffb347" : n >= 4 ? "#ffd166" : "#7ef0ff",
         n >= 4 ? 17 : 13
       );
       if (n >= 4) this.emit({ type: "tetris" });
@@ -595,11 +607,13 @@ export class TetrisGame {
     this.phase = "gameover";
     this.cur = null;
     this.clearing = null;
+    this.chaos = 0;
+    this.rocks = [];
+    this.lava = [];
     this.atk.phase = "idle";
     audio.stopMusic();
     audio.gameover();
     this.shake = 14;
-    // explode the stack
     let count = 0;
     for (let y = HIDDEN; y < TOTAL && count < 220; y++) {
       for (let x = 0; x < COLS && count < 220; x++) {
@@ -612,6 +626,183 @@ export class TetrisGame {
     }
     this.emit({ type: "gameover" });
     this.hud();
+  }
+
+  /* ---------------- sniper attack ---------------- */
+  private pieceCenter(): { x: number; y: number } {
+    const W = COLS * CELL;
+    const H = ROWS * CELL;
+    if (!this.cur) return { x: W / 2, y: H * 0.3 };
+    const cs = this.cellsOf(this.cur.shape);
+    let sx = 0;
+    let sy = 0;
+    for (const [cx, cy] of cs) {
+      sx += (this.cur.x + cx + 0.5) * CELL;
+      sy += (this.cur.y + cy - HIDDEN + 0.5) * CELL;
+    }
+    return { x: sx / cs.length, y: Math.max(CELL, sy / cs.length) };
+  }
+
+  triggerChaos() {
+    if (this.phase !== "playing") return;
+    if (this.chaos <= 0) this.emit({ type: "chaos-start" });
+    this.chaos = 8;
+    this.shake = Math.max(this.shake, 15);
+    audio.chaosStart();
+  }
+
+  private updateAttack(dt: number) {
+    if (this.phase !== "playing") return;
+    const a = this.atk;
+    if (a.phase === "idle") {
+      if (this.level < 2 || !this.cur || this.clearing) return;
+      if (this.time >= a.next) {
+        a.phase = "aim";
+        a.t = 0;
+        audio.sniperWarn();
+        this.emit({ type: "attack-warn" });
+      }
+      return;
+    }
+    a.t += dt;
+    if (a.phase === "aim") {
+      if (a.t >= 1.05) {
+        a.phase = "fire";
+        a.t = 0;
+        const c = this.pieceCenter();
+        a.row = Math.min(ROWS - 1, Math.max(0, Math.round((c.y - CELL / 2) / CELL)));
+        a.dir = Math.random() < 0.5 ? 1 : -1;
+        a.bx = a.dir === 1 ? -60 : COLS * CELL + 60;
+        a.dmg = 1 + (Math.random() < 0.45 ? 1 : 0);
+        audio.sniperShot();
+        this.emit({ type: "attack-shot" });
+      }
+      return;
+    }
+    // fire
+    a.bx += a.dir * 2600 * dt;
+    const inRange = a.bx > 0 && a.bx < COLS * CELL;
+    if (inRange) this.shake = Math.max(this.shake, 1.4);
+    const hit = this.cur && Math.abs(a.bx - this.pieceCenter().x) < CELL * 0.55;
+    if (inRange && hit && this.cur) {
+      audio.sniperHit();
+      this.hitsTaken++;
+      this.shake = Math.max(this.shake, 10);
+      this.burstAtPiece(16, "#ff5c7a", 2.4);
+      this.burstAtPiece(8, "#ffffff", 1.6);
+      this.dmgCur(a.dmg);
+      a.phase = "idle";
+      a.next = this.time + Math.max(6, 17 - this.level * 0.6) + Math.random() * 8;
+      this.emit({ type: "attack-hit" });
+      this.hud();
+      return;
+    }
+    if ((a.dir === 1 && a.bx >= COLS * CELL + 40) || (a.dir === -1 && a.bx <= -40)) {
+      audio.sniperMiss();
+      a.phase = "idle";
+      a.next = this.time + Math.max(6, 17 - this.level * 0.6) + Math.random() * 8;
+      this.emit({ type: "attack-miss" });
+    }
+  }
+
+  private dmgCur(dmg: number) {
+    const cur = this.cur;
+    if (!cur) return;
+    const cells = this.cellsOf(cur.shape);
+    for (let k = 0; k < dmg && cells.length > 1; k++) {
+      const idx = Math.floor(Math.random() * cells.length);
+      const [cx, cy] = cells[idx];
+      cur.shape[cy][cx] = 0;
+      cells.splice(idx, 1);
+    }
+    this.cur = {
+      ...cur,
+      shape: cur.shape.map((r) => {
+        const nr = [...r];
+        while (nr.length && nr.every((v) => !v)) nr.pop();
+        return nr;
+      }),
+    };
+    if (!this.cur.shape.length || this.cur.shape.every((r) => r.every((v) => !v))) {
+      this.cur = null;
+      this.holdUsed = false;
+      this.spawnNext();
+    }
+  }
+
+  /* ---------------- chaos of the drop ---------------- */
+  private smashCell() {
+    if (this.clearing) return;
+    const cands: [number, number][] = [];
+    for (let y = HIDDEN; y < Math.min(TOTAL, HIDDEN + 7); y++)
+      for (let x = 0; x < COLS; x++) if (this.grid[y][x]) cands.push([x, y]);
+    if (!cands.length) return;
+    const [x, y] = cands[Math.floor(Math.random() * cands.length)];
+    const c = this.grid[y][x] as PieceId;
+    this.grid[y][x] = 0;
+    this.score += 50;
+    for (let k = 0; k < 8; k++)
+      this.spawnParticle(x * CELL + 16, (y - HIDDEN) * CELL + 16, COLORS[c].m, 1.6);
+    this.addFloater(x * CELL + 16, (y - HIDDEN) * CELL, "+50 КАМЕНЬ!", "#ff8f2d", 11);
+    this.hud();
+  }
+
+  private updateChaos(dt: number) {
+    this.chaos -= dt;
+    if (this.chaos <= 0) {
+      this.chaos = 0;
+      this.rocks = [];
+      this.lava = [];
+      this.lightning = 0;
+      this.emit({ type: "chaos-end" });
+      return;
+    }
+    const H = ROWS * CELL;
+    this.shake = Math.max(this.shake, 6 + Math.abs(Math.sin(this.rainbowT * 22)) * 3);
+    if (this.lightning > 0) this.lightning -= dt;
+
+    this.chaosRockAcc += dt;
+    if (this.chaosRockAcc > 0.3) {
+      this.chaosRockAcc = 0;
+      this.rocks.push({
+        x: 10 + Math.random() * (COLS * CELL - 20),
+        y: -40,
+        vy: 70 + Math.random() * 100,
+        vr: (Math.random() - 0.5) * 6,
+        rot: Math.random() * 6.3,
+        size: 9 + Math.random() * 13,
+      });
+    }
+    this.chaosLavaAcc += dt;
+    if (this.chaosLavaAcc > 0.07) {
+      this.chaosLavaAcc = 0;
+      this.lava.push({ x: Math.random() * COLS * CELL, y: -8, vy: 250 + Math.random() * 230 });
+    }
+    if (Math.random() < dt * 1.8) {
+      this.lightning = 0.11;
+      audio.thunder();
+    }
+
+    for (let i = this.rocks.length - 1; i >= 0; i--) {
+      const r = this.rocks[i];
+      r.vy += 520 * dt;
+      r.y += r.vy * dt;
+      r.rot += r.vr * dt;
+      if (r.y > H - r.size * 0.5) {
+        this.rocks.splice(i, 1);
+        this.shake = Math.max(this.shake, 5);
+        audio.rockThud();
+        for (let k = 0; k < 10; k++)
+          this.spawnParticle(r.x, H - 6, k % 2 ? "#8a8fa8" : "#ff8f2d", 1.4);
+        if (Math.random() < 0.3) this.smashCell();
+      }
+    }
+    for (let i = this.lava.length - 1; i >= 0; i--) {
+      const l = this.lava[i];
+      l.y += l.vy * dt;
+      if (Math.random() < dt * 18) this.spawnParticle(l.x, l.y, "#ffae3d", 0.5);
+      if (l.y > H + 10) this.lava.splice(i, 1);
+    }
   }
 
   /* ---------------- particles ---------------- */
@@ -650,163 +841,6 @@ export class TetrisGame {
     this.floaters.push({ x, y, text, color, t: 0, life: 1.1, size });
   }
 
-  /* ---------------- sniper attacks (анимешки палят по фигуре) ---------------- */
-  private pieceCenter(): { vx: number; vy: number } | null {
-    if (!this.cur) return null;
-    const cells = this.cellsOf(this.cur.shape);
-    if (!cells.length) return null;
-    let sx = 0;
-    let sy = 0;
-    for (const [cx, cy] of cells) {
-      sx += this.cur.x + cx + 0.5;
-      sy += this.cur.y + cy - HIDDEN + 0.5;
-    }
-    return { vx: sx / cells.length, vy: sy / cells.length };
-  }
-
-  private updateAttack(dt: number) {
-    const atk = this.atk;
-    if (atk.phase === "idle") {
-      if (this.cur && !this.clearing && this.time >= atk.next) {
-        atk.phase = "aim";
-        atk.t = 0;
-        atk.dir = Math.random() < 0.5 ? 1 : -1;
-        audio.sniperWarn();
-        this.emit({ type: "attack-warn" });
-      }
-      return;
-    }
-    atk.t += dt;
-    if (atk.phase === "aim") {
-      if (atk.t >= 0.85) {
-        atk.phase = "fire";
-        atk.t = 0;
-        atk.dmg = 0;
-        const c = this.pieceCenter();
-        atk.row = c ? Math.max(0, Math.min(ROWS - 1, Math.round(c.vy - 0.5))) : 10;
-        atk.bx = atk.dir === 1 ? -1.8 : COLS + 1.8;
-        audio.sniperShot();
-        this.shake = Math.max(this.shake, 6);
-        this.emit({ type: "attack-shot", dir: atk.dir });
-      }
-      return;
-    }
-    // fire: bullet flies across the locked row
-    atk.bx += atk.dir * 62 * dt;
-    if (this.cur && atk.dmg < 2) {
-      for (const [cx, cy] of this.cellsOf(this.cur.shape)) {
-        const gx = this.cur.x + cx;
-        const gy = this.cur.y + cy;
-        if (gy - HIDDEN === atk.row && Math.abs(gx + 0.5 - atk.bx) < 0.55) {
-          this.cur.shape[cy][cx] = 0;
-          atk.dmg++;
-          this.hitsTaken++;
-          this.shake = Math.max(this.shake, 12);
-          audio.sniperHit();
-          const px = gx * CELL + CELL / 2;
-          const py = (gy - HIDDEN) * CELL + CELL / 2;
-          for (let i = 0; i < 14; i++) {
-            this.spawnParticle(px, py, i % 3 ? "#ff5c7a" : "#ffd166", 2.4);
-          }
-          this.addFloater(px, py - 12, "БАМ!", "#ff5c7a", 18);
-          this.emit({ type: "attack-hit" });
-          this.hud();
-          break;
-        }
-      }
-    }
-    if ((atk.dir === 1 && atk.bx > COLS + 2.2) || (atk.dir === -1 && atk.bx < -2.2)) {
-      const missed = atk.dmg === 0;
-      atk.phase = "idle";
-      atk.next = this.time + Math.max(9, 13 + Math.random() * 13 - this.level * 0.6);
-      if (missed) {
-        audio.sniperMiss();
-        this.emit({ type: "attack-miss" });
-      }
-    }
-  }
-
-  private drawAttack(g: CanvasRenderingContext2D, now: number, W: number) {
-    const atk = this.atk;
-    const H = ROWS * CELL;
-    if (atk.phase === "aim") {
-      const c = this.pieceCenter();
-      if (!c) return;
-      const px = c.vx * CELL;
-      const py = c.vy * CELL;
-      const pulse = 0.5 + 0.5 * Math.sin(now / 70);
-      // laser line preview
-      g.save();
-      g.globalAlpha = 0.14 + 0.12 * pulse;
-      g.fillStyle = "#ff2d55";
-      g.fillRect(0, py - 2, W, 4);
-      g.restore();
-      // crosshair
-      g.save();
-      g.strokeStyle = "#ff2d55";
-      g.lineWidth = 2.4;
-      g.globalAlpha = 0.7 + 0.3 * pulse;
-      const r = CELL * 1.05 + pulse * 4;
-      g.beginPath();
-      g.arc(px, py, r, 0, Math.PI * 2);
-      g.stroke();
-      g.beginPath();
-      const dirs: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-      for (const [dx, dy] of dirs) {
-        g.moveTo(px + dx * (r - 6), py + dy * (r - 6));
-        g.lineTo(px + dx * (r + 9), py + dy * (r + 9));
-      }
-      g.stroke();
-      // marker
-      g.fillStyle = "#ff2d55";
-      g.font = '900 24px "Exo 2", sans-serif';
-      g.textAlign = "center";
-      g.fillText("!", px, py - r - 8);
-      g.restore();
-      // red warning frame
-      g.save();
-      g.strokeStyle = `rgba(255,45,85,${(0.25 + 0.35 * pulse).toFixed(3)})`;
-      g.lineWidth = 3;
-      g.strokeRect(1.5, 1.5, W - 3, H - 3);
-      g.restore();
-    } else if (atk.phase === "fire") {
-      const py = (atk.row + 0.5) * CELL;
-      const head = atk.bx * CELL;
-      const tail = head - atk.dir * CELL * 2.6;
-      // muzzle flash
-      if (atk.t < 0.08) {
-        const mx = atk.dir === 1 ? 4 : W - 4;
-        const k = 1 - atk.t / 0.08;
-        g.save();
-        g.globalAlpha = k;
-        g.fillStyle = "#ffe9a8";
-        g.beginPath();
-        g.arc(mx, py, 18 * k + 6, 0, Math.PI * 2);
-        g.fill();
-        g.fillStyle = "#ffffff";
-        g.beginPath();
-        g.arc(mx, py, 9 * k + 3, 0, Math.PI * 2);
-        g.fill();
-        g.restore();
-      }
-      // tracer
-      g.save();
-      g.globalCompositeOperation = "lighter";
-      const grad = g.createLinearGradient(tail, 0, head, 0);
-      grad.addColorStop(0, "rgba(255,92,122,0)");
-      grad.addColorStop(0.7, "rgba(255,92,122,0.85)");
-      grad.addColorStop(1, "rgba(255,255,255,0.95)");
-      g.strokeStyle = grad;
-      g.lineWidth = 5;
-      g.lineCap = "round";
-      g.beginPath();
-      g.moveTo(tail, py);
-      g.lineTo(head, py);
-      g.stroke();
-      g.restore();
-    }
-  }
-
   /* ---------------- update ---------------- */
   private update(dt: number) {
     if (this.phase === "playing") {
@@ -821,7 +855,6 @@ export class TetrisGame {
           this.spawnNext();
         }
       } else if (this.cur) {
-        // DAS
         if (this.dasDir !== 0) {
           this.dasTimer += dt * 1000;
           if (this.dasTimer >= 150) {
@@ -832,7 +865,6 @@ export class TetrisGame {
             }
           }
         }
-        // gravity
         const iv = this.softHeld ? Math.min(this.interval(), 38) : this.interval();
         this.dropAcc += dt * 1000;
         if (this.dropAcc >= iv) {
@@ -845,7 +877,6 @@ export class TetrisGame {
             }
           }
         }
-        // lock delay
         if (this.collides(this.cur.shape, this.cur.x, this.cur.y + 1)) {
           this.lockTimer += dt * 1000;
           if (this.lockTimer >= 500) this.lockPiece();
@@ -854,9 +885,10 @@ export class TetrisGame {
         }
       }
       this.updateAttack(dt);
+      if (this.chaos > 0) this.updateChaos(dt);
     }
     // fx
-    this.shake *= Math.pow(0.03, dt); // fast decay
+    this.shake *= Math.pow(0.03, dt);
     if (this.shake < 0.25) this.shake = 0;
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
@@ -904,6 +936,11 @@ export class TetrisGame {
     } else {
       g.drawImage(sp, px - 8, py - 8, CELL + 16, CELL + 16);
     }
+    if (this.chaos > 0) {
+      g.globalAlpha = alpha * 0.16;
+      g.fillStyle = `hsl(${Math.round((this.rainbowT * 240 + gx * 24 + gy * 40) % 360)} 100% 62%)`;
+      g.fillRect(px + 1, py + 1, CELL - 2, CELL - 2);
+    }
     g.globalAlpha = 1;
   }
 
@@ -911,6 +948,7 @@ export class TetrisGame {
     const g = this.ctx;
     const W = COLS * CELL;
     const H = ROWS * CELL;
+    this.rainbowT = now / 1000;
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     g.clearRect(0, 0, W, H);
 
@@ -921,16 +959,21 @@ export class TetrisGame {
 
     // background
     const bg = g.createLinearGradient(0, 0, 0, H);
-    bg.addColorStop(0, "#0b1136");
-    bg.addColorStop(0.55, "#0a0e2c");
-    bg.addColorStop(1, "#070a20");
+    if (this.chaos > 0) {
+      bg.addColorStop(0, "#2a0a18");
+      bg.addColorStop(0.55, "#1c0820");
+      bg.addColorStop(1, "#33100a");
+    } else {
+      bg.addColorStop(0, "#0b1136");
+      bg.addColorStop(0.55, "#0a0e2c");
+      bg.addColorStop(1, "#070a20");
+    }
     g.fillStyle = bg;
     g.fillRect(-20, -20, W + 40, H + 40);
 
-    // faint diagonal stripes
     g.save();
     g.globalAlpha = 0.05;
-    g.strokeStyle = "#8fa2ff";
+    g.strokeStyle = this.chaos > 0 ? "#ff8f6a" : "#8fa2ff";
     g.lineWidth = 1;
     for (let i = -H; i < W + H; i += 46) {
       g.beginPath();
@@ -954,7 +997,7 @@ export class TetrisGame {
     }
     g.stroke();
 
-    // column glow under current piece
+    // column glow
     if (this.cur && !this.clearing) {
       const xs = new Set<number>();
       for (const [cx] of this.cellsOf(this.cur.shape)) xs.add(this.cur.x + cx);
@@ -984,10 +1027,9 @@ export class TetrisGame {
           const c = this.grid[y][x];
           if (c) this.drawSprite(c, x, y - HIDDEN, alpha, scale);
         }
-        // white sweep
         g.globalAlpha = (1 - k) * 0.9;
         g.fillStyle = "#ffffff";
-        const sweepX = ((k * 1.4 - 0.2) * (W + 120)) - 60;
+        const sweepX = (k * 1.4 - 0.2) * (W + 120) - 60;
         g.fillRect(sweepX, (y - HIDDEN) * CELL, 60, CELL);
         g.globalAlpha = 1;
       }
@@ -1001,6 +1043,46 @@ export class TetrisGame {
       this.rr(g, f.x * CELL + 2, (f.y - HIDDEN) * CELL + 2, CELL - 4, CELL - 4, 4);
       g.fill();
       g.globalAlpha = 1;
+    }
+
+    // sniper aim laser + crosshair
+    if (this.phase === "playing" && this.atk.phase === "aim" && this.cur) {
+      const c = this.pieceCenter();
+      const yy = Math.min(H - 8, Math.max(8, c.y));
+      const pulse = 0.35 + 0.25 * Math.sin(now / 60);
+      const grad = g.createLinearGradient(0, yy - 8, 0, yy + 8);
+      grad.addColorStop(0, "rgba(255,45,85,0)");
+      grad.addColorStop(0.5, `rgba(255,45,85,${pulse.toFixed(3)})`);
+      grad.addColorStop(1, "rgba(255,45,85,0)");
+      g.fillStyle = grad;
+      g.fillRect(0, yy - 8, W, 16);
+      g.strokeStyle = "rgba(255,60,90,0.9)";
+      g.lineWidth = 1.6;
+      g.beginPath();
+      g.moveTo(0, yy);
+      g.lineTo(W, yy);
+      g.stroke();
+      const r = 15 + 6 * Math.sin(now / 90);
+      g.save();
+      g.translate(c.x, yy);
+      g.rotate(now / 500);
+      g.strokeStyle = "#ff2d55";
+      g.lineWidth = 2;
+      g.shadowColor = "rgba(255,45,85,0.9)";
+      g.shadowBlur = 8;
+      for (let i = 0; i < 4; i++) {
+        const a0 = (i * Math.PI) / 2;
+        g.beginPath();
+        g.arc(0, 0, r, a0 + 0.28, a0 + Math.PI / 2 - 0.28);
+        g.stroke();
+      }
+      g.beginPath();
+      g.moveTo(-r - 7, 0); g.lineTo(-r + 3, 0);
+      g.moveTo(r - 3, 0); g.lineTo(r + 7, 0);
+      g.moveTo(0, -r - 7); g.lineTo(0, -r + 3);
+      g.moveTo(0, r - 3); g.lineTo(0, r + 7);
+      g.stroke();
+      g.restore();
     }
 
     // ghost
@@ -1032,9 +1114,6 @@ export class TetrisGame {
         this.drawSprite(this.cur.id, this.cur.x + cx, yy, 1, pulse);
       }
     }
-
-    // sniper attack visuals
-    this.drawAttack(g, now, W);
 
     // particles
     for (const p of this.particles) {
@@ -1075,6 +1154,48 @@ export class TetrisGame {
     }
     g.globalAlpha = 1;
 
+    // rocks & lava drops (chaos)
+    for (const r of this.rocks) {
+      g.save();
+      g.translate(r.x, r.y);
+      g.rotate(r.rot);
+      g.fillStyle = "#3c4158";
+      g.strokeStyle = "#191c2e";
+      g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(-r.size, -r.size * 0.5);
+      g.lineTo(-r.size * 0.3, -r.size);
+      g.lineTo(r.size * 0.8, -r.size * 0.6);
+      g.lineTo(r.size, r.size * 0.4);
+      g.lineTo(r.size * 0.2, r.size);
+      g.lineTo(-r.size * 0.7, r.size * 0.7);
+      g.closePath();
+      g.fill();
+      g.stroke();
+      g.strokeStyle = "rgba(255,140,50,0.8)";
+      g.lineWidth = 1.4;
+      g.beginPath();
+      g.moveTo(-r.size * 0.5, -r.size * 0.3);
+      g.lineTo(0, 0);
+      g.lineTo(r.size * 0.4, -r.size * 0.2);
+      g.stroke();
+      g.restore();
+    }
+    for (const l of this.lava) {
+      g.save();
+      g.shadowColor = "rgba(255,140,40,0.9)";
+      g.shadowBlur = 10;
+      g.fillStyle = "#ffae3d";
+      g.beginPath();
+      g.arc(l.x, l.y, 3.2, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = "#fff0c0";
+      g.beginPath();
+      g.arc(l.x, l.y - 1, 1.4, 0, Math.PI * 2);
+      g.fill();
+      g.restore();
+    }
+
     // floaters
     for (const f of this.floaters) {
       const a = f.t < 0.15 ? f.t / 0.15 : 1 - Math.max(0, (f.t - 0.6) / (f.life - 0.6));
@@ -1107,6 +1228,33 @@ export class TetrisGame {
       dg.addColorStop(1, "rgba(255,45,80,0)");
       g.fillStyle = dg;
       g.fillRect(0, 0, W, H * 0.4);
+    }
+
+    // chaos overlay: lava lake + red filter + lightning
+    if (this.chaos > 0) {
+      const lh = 26 + Math.sin(now / 150) * 8;
+      const lg = g.createLinearGradient(0, H - lh - 26, 0, H);
+      lg.addColorStop(0, "rgba(255,80,20,0)");
+      lg.addColorStop(1, "rgba(255,110,20,0.55)");
+      g.fillStyle = lg;
+      g.fillRect(0, H - lh - 26, W, lh + 26);
+      g.fillStyle = "rgba(255,190,80,0.85)";
+      for (let i = 0; i < 6; i++) {
+        const bx = ((i * 61 + now / 9) % (W + 30)) - 15;
+        const by = H - 8 - Math.abs(Math.sin(now / 260 + i * 1.7)) * 14;
+        g.beginPath();
+        g.arc(bx, by, 2.4, 0, Math.PI * 2);
+        g.fill();
+      }
+      const pulse = 0.09 + 0.07 * Math.sin(now / 90);
+      g.fillStyle = `rgba(255,30,50,${pulse.toFixed(3)})`;
+      g.fillRect(0, 0, W, H);
+      if (this.lightning > 0) {
+        g.globalAlpha = Math.min(0.7, this.lightning * 6);
+        g.fillStyle = "#ffffff";
+        g.fillRect(0, 0, W, H);
+        g.globalAlpha = 1;
+      }
     }
 
     g.restore();

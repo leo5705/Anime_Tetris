@@ -15,43 +15,54 @@ const MASCOT_URL =
   "https://image.qwenlm.ai/generated-images/4a777d6a-ee03-4e49-8d37-8efca35d28cc/_result.png";
 const SHOOTER_URL =
   "https://image.qwenlm.ai/generated-images/35c2c050-3ff0-4d5d-8f66-a299ec987f96/_result.png";
+const CROWD_URL =
+  "https://image.qwenlm.ai/generated-images/4b7c6dbb-30d9-4156-a6ab-1ca4e45edf58/_result.png";
 
-const YT_VIDEO_ID = "J7NFL-eOxiQ"; // VILLIAN, madk1d — «Династия»
+const YT_VIDEO_ID = "J7NFL-eOxiQ";
+const DROP_AT = 62.6; // 1:03 «Династии»
 
-/* ================= YouTube IFrame API (радио) ================= */
-
-type YTPlayer = {
-  playVideo: () => void;
-  pauseVideo: () => void;
-  setVolume: (v: number) => void;
-  destroy: () => void;
-};
+/* ---------- YouTube IFrame API ---------- */
+interface YTPlayer {
+  playVideo(): void;
+  pauseVideo(): void;
+  setVolume(v: number): void;
+  destroy(): void;
+  getCurrentTime(): number;
+  getPlayerState(): number;
+}
 declare global {
   interface Window {
-    YT?: { Player: new (el: HTMLElement, opts: unknown) => YTPlayer };
+    YT?: {
+      Player: new (
+        el: HTMLElement,
+        opts: {
+          width?: string;
+          height?: string;
+          videoId: string;
+          playerVars?: Record<string, number>;
+          events?: Record<string, (e: { data: number; target: YTPlayer }) => void>;
+        }
+      ) => YTPlayer;
+    };
     onYouTubeIframeAPIReady?: () => void;
   }
 }
-let ytApiPromise: Promise<void> | null = null;
 function ensureYtApi(): Promise<void> {
-  if (ytApiPromise) return ytApiPromise;
-  ytApiPromise = new Promise((resolve) => {
-    if (window.YT?.Player) {
-      resolve();
-      return;
-    }
+  return new Promise((resolve) => {
+    if (window.YT?.Player) return resolve();
     const prev = window.onYouTubeIframeAPIReady;
     window.onYouTubeIframeAPIReady = () => {
       prev?.();
       resolve();
     };
-    const s = document.createElement("script");
-    s.src = "https://www.youtube.com/iframe_api";
-    s.async = true;
-    document.head.appendChild(s);
-    window.setTimeout(resolve, 7000);
+    if (!document.querySelector("script[data-yt-api]")) {
+      const s = document.createElement("script");
+      s.src = "https://www.youtube.com/iframe_api";
+      s.async = true;
+      s.setAttribute("data-yt-api", "1");
+      document.head.appendChild(s);
+    }
   });
-  return ytApiPromise;
 }
 
 /* ================= small building blocks ================= */
@@ -182,7 +193,6 @@ function Petals() {
 }
 
 function LogoMark({ size = 30 }: { size?: number }) {
-  const s = size / 4;
   return (
     <svg width={size} height={size * 0.75} viewBox="0 0 40 30" aria-hidden>
       <rect x="1" y="1" width="12" height="12" rx="2" fill="#ff2d8f" />
@@ -280,6 +290,15 @@ function Key({ k }: { k: string }) {
   return <span className="keycap">{k}</span>;
 }
 
+const FLYERS = [
+  { src: MASCOT_URL, top: "7%", delay: "0s", dur: "2.6s" },
+  { src: SHOOTER_URL, top: "21%", delay: "-0.9s", dur: "3.1s" },
+  { src: CROWD_URL, top: "37%", delay: "-1.6s", dur: "2.3s" },
+  { src: MASCOT_URL, top: "53%", delay: "-0.4s", dur: "3.4s" },
+  { src: SHOOTER_URL, top: "67%", delay: "-2.1s", dur: "2.8s" },
+  { src: CROWD_URL, top: "79%", delay: "-1.2s", dur: "3.6s" },
+];
+
 /* ================= App ================= */
 
 export default function App() {
@@ -288,6 +307,9 @@ export default function App() {
   const boardWrapRef = useRef<HTMLDivElement>(null);
   const bestAtStartRef = useRef(0);
   const exclId = useRef(0);
+  const lastYtRef = useRef(0);
+  const ytPlayerRef = useRef<YTPlayer | null>(null);
+  const radioWrapRef = useRef<HTMLDivElement>(null);
 
   const [hud, setHud] = useState<HudData>({
     score: 0,
@@ -309,6 +331,7 @@ export default function App() {
   const [aiming, setAiming] = useState(false);
   const [shooterFx, setShooterFx] = useState(0);
   const [hitFx, setHitFx] = useState(0);
+  const [chaos, setChaos] = useState(false);
   const [musicMode, setMusicMode] = useState<"chip" | "radio" | "off">(() => {
     try {
       const v = localStorage.getItem("anime-tetris-music");
@@ -319,8 +342,6 @@ export default function App() {
     return "chip";
   });
   const [radioPlaying, setRadioPlaying] = useState(false);
-  const ytPlayerRef = useRef<YTPlayer | null>(null);
-  const radioWrapRef = useRef<HTMLDivElement>(null);
 
   const say = useCallback((jp: string, ru: string) => {
     setBubble((b) => ({ jp, ru, key: b.key + 1 }));
@@ -346,13 +367,13 @@ export default function App() {
         case "start":
           bestAtStartRef.current = gameRef.current?.best ?? 0;
           setNewRecord(false);
-          setAiming(false);
+          setChaos(false);
           say("レッツゴー！", "Поехали!");
           break;
         case "clear": {
           const words: Record<number, [string, string, string]> = {
-            1: ["YATTA!", "Ятта!", "text-[#7ef0ff] excl-pink"],
-            2: ["SUGOI!", "Сугой!", "text-[#ff9ecb] excl-cyan"],
+            1: ["YATTA!", "Ятта!", "text-[#7ef0ff]"],
+            2: ["SUGOI!", "Сугой!", "text-[#ff9ecb]"],
             3: ["KAWAII!", "Кавайи!", "text-[#9dffb8]"],
           };
           const w = words[e.n] ?? words[1];
@@ -367,17 +388,17 @@ export default function App() {
           break;
         }
         case "tetris":
-          pushExcl("テトリス！！", "TETRIS ×4!", "text-[#ffe6a3] excl-big");
+          pushExcl("テトリス！！", "TETRIS ×4!", "text-[#ffe6a3]");
           say("すごすぎる！！", "Целых четыре!!");
           setMascotKey((k) => k + 1);
           domShake();
           break;
         case "combo":
-          pushExcl(`${e.n} COMBO`, "コンボ！", "text-[#7ef0ff] excl-combo");
+          pushExcl(`${e.n} COMBO`, "コンボ！", "text-[#7ef0ff]");
           if (e.n >= 3) say("コンボつづき！", "Серия комбо!");
           break;
         case "levelup":
-          pushExcl(`LEVEL ${e.level}`, "レベルアップ！", "text-[#ffe6a3] excl-gold");
+          pushExcl(`LEVEL ${e.level}`, "レベルアップ！", "text-[#ffe6a3]");
           say("レベルアップ！", `Уровень ${e.level}!`);
           setMascotKey((k) => k + 1);
           break;
@@ -387,12 +408,15 @@ export default function App() {
             setTime(g.getTime());
             if (g.score > bestAtStartRef.current) setNewRecord(true);
           }
+          setChaos(false);
+          setAiming(false);
           say("がんばって…", "Гамбатэ… ещё раз!");
           domShake();
           break;
         }
         case "pause":
           if (gameRef.current) setTime(gameRef.current.getTime());
+          setAiming(false);
           say("きゅうけいタイム", "Перерыв на чай");
           break;
         case "resume":
@@ -415,6 +439,17 @@ export default function App() {
         case "attack-miss":
           pushExcl("ПРОМАХ!", "ハズレ~", "text-[#7ef0ff]");
           say("ざんねん~", "Уф, промахнулась!");
+          break;
+        case "chaos-start":
+          setChaos(true);
+          pushExcl("DROP!!!", "ДРОП! ОЧКИ ×2!", "text-[#ffb347]");
+          say("無茶苦茶だー！！", "ПОЛНОЕ БЕЗУМИЕ!!");
+          setMascotKey((k) => k + 1);
+          domShake();
+          break;
+        case "chaos-end":
+          setChaos(false);
+          say("はあはあ…", "Фух… отпустило");
           break;
         case "harddrop":
           break;
@@ -557,7 +592,7 @@ export default function App() {
   const toggleMuteRef = useRef(toggleMute);
   toggleMuteRef.current = toggleMute;
 
-  /* ---- музыкальный режим: чиптюн / радио (YouTube) / выкл ---- */
+  /* ---- музыкальный режим ---- */
   const cycleMusic = useCallback(() => {
     setMusicMode((m) => {
       const next = m === "chip" ? "radio" : m === "radio" ? "off" : "chip";
@@ -618,11 +653,11 @@ export default function App() {
           disablekb: 1,
         },
         events: {
-          onReady: (e: { target: YTPlayer }) => {
+          onReady: (e) => {
             e.target.setVolume(audio.muted ? 0 : 70);
             e.target.playVideo();
           },
-          onStateChange: (e: { data: number; target: YTPlayer }) => {
+          onStateChange: (e) => {
             if (e.data === 1) setRadioPlaying(true);
             if (e.data === 2) setRadioPlaying(false);
             if (e.data === 0) e.target.playVideo(); // зацикливаем трек
@@ -634,6 +669,36 @@ export default function App() {
       cancelled = true;
     };
   }, [musicMode]);
+
+  /* ---- детектор дропа на 1:03 ---- */
+  useEffect(() => {
+    if (musicMode !== "radio") return;
+    const t = window.setInterval(() => {
+      const p = ytPlayerRef.current;
+      if (!p) return;
+      try {
+        if (p.getPlayerState() !== 1) return;
+        const tt = p.getCurrentTime() ?? 0;
+        let prev = lastYtRef.current;
+        if (tt < prev - 2) prev = 0; // трек начался заново
+        if (prev < DROP_AT && tt >= DROP_AT) gameRef.current?.triggerChaos();
+        lastYtRef.current = tt;
+      } catch {
+        /* ignore */
+      }
+    }, 200);
+    return () => window.clearInterval(t);
+  }, [musicMode]);
+
+  /* ---- сюрприз-безумие в чиптюн-режиме ---- */
+  useEffect(() => {
+    if (hud.phase !== "playing" || musicMode !== "chip") return;
+    const t = window.setTimeout(
+      () => gameRef.current?.triggerChaos(),
+      60000 + Math.random() * 30000
+    );
+    return () => window.clearTimeout(t);
+  }, [hud.phase, musicMode]);
 
   const radioPlay = useCallback(() => {
     audio.ensure();
@@ -666,7 +731,7 @@ export default function App() {
   const levelProg = (hud.lines % 10) * 10;
 
   return (
-    <div className="relative min-h-screen overflow-hidden">
+    <div className={"relative min-h-screen overflow-hidden " + (chaos ? "chaos-root" : "")}>
       {/* ============ ambient background ============ */}
       <div className="fixed inset-0 z-0 overflow-hidden">
         <img
@@ -675,7 +740,12 @@ export default function App() {
           className="anim-bg-breathe h-full w-full object-cover"
           draggable={false}
         />
-        <div className="absolute inset-0 bg-gradient-to-b from-[#070a1f]/75 via-[#070a1f]/35 to-[#070a1f]/92" />
+        <div
+          className={
+            "absolute inset-0 bg-gradient-to-b from-[#070a1f]/75 via-[#070a1f]/35 to-[#070a1f]/92 transition-colors duration-500 " +
+            (chaos ? "opacity-60" : "")
+          }
+        />
         <div
           className="absolute inset-0"
           style={{ background: "radial-gradient(ellipse at center, transparent 45%, rgba(4,6,18,0.75) 100%)" }}
@@ -771,7 +841,7 @@ export default function App() {
               }
             >
               <div className="clip-panel relative bg-[#0d1334]/95 p-2">
-                <div className="relative overflow-hidden clip-panel-sm">
+                <div className="clip-panel-sm relative overflow-hidden">
                   <img
                     src={MASCOT_URL}
                     alt="Мико-тян"
@@ -865,7 +935,7 @@ export default function App() {
                 <p className="mt-1.5 text-center text-[10px] font-semibold leading-snug text-[#c09ab4]">
                   {aiming
                     ? "УВОРАЧИВАЙСЯ! Жми SPACE — бросай фигуру!"
-                    : "Шальная пуля: иногда отстреливает блоки твоей фигуры"}
+                    : "Шальная пуля: иногда отстреливает блоки у фигуры"}
                 </p>
               </div>
             </div>
@@ -984,9 +1054,12 @@ export default function App() {
             </Panel>
 
             <Panel jp="スコア" title="SCORE">
-              <p className="font-arcade text-[15px] leading-none text-white" style={{ textShadow: "0 0 12px rgba(45,226,255,0.65)" }}>
-                {hud.score.toLocaleString("ru-RU")}
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="font-arcade text-[15px] leading-none text-white" style={{ textShadow: "0 0 12px rgba(45,226,255,0.65)" }}>
+                  {hud.score.toLocaleString("ru-RU")}
+                </p>
+                {chaos && <span className="font-arcade chaos-x2 text-[13px]">×2</span>}
+              </div>
               <p className="mt-1.5 text-[10px] font-bold tracking-wider text-[#5b6aa8]">
                 РЕКОРД <span className="text-[#ffe6a3]">{hud.best.toLocaleString("ru-RU")}</span>
               </p>
@@ -1112,7 +1185,7 @@ export default function App() {
               </div>
 
               <p className="mt-4 inline-block clip-panel-sm bg-[#ff2d55]/12 px-3 py-1.5 text-[12px] font-semibold text-[#ff9d9d]">
-                Осторожно: Снайпер-тян палит по фигуре шальными пулями — уворачивайся или лови «БАМ!»
+                Осторожно: Снайпер-тян палит по фигуре шальными пулями, а на дропе «Династии» начинается полное безумие
               </p>
 
               {hud.best > 0 && (
@@ -1193,6 +1266,37 @@ export default function App() {
                 </p>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============ CHAOS OVERLAY (дроп) ============ */}
+      {chaos && (
+        <div className="pointer-events-none fixed inset-0 z-[60] overflow-hidden">
+          <div className="chaos-redfilter absolute inset-0" />
+          <div className="chaos-flicker absolute inset-0" />
+          {/* crowd parade */}
+          <div className="absolute inset-x-0 bottom-0 h-28">
+            <div className="crowd-band crowd-b" style={{ backgroundImage: `url(${CROWD_URL})` }} />
+            <div className="crowd-band crowd-a" style={{ backgroundImage: `url(${CROWD_URL})` }} />
+          </div>
+          {/* flying girls */}
+          {FLYERS.map((f, i) => (
+            <img
+              key={i}
+              src={f.src}
+              alt=""
+              draggable={false}
+              className="chaos-flyer"
+              style={{ top: f.top, animationDelay: f.delay, animationDuration: f.dur }}
+            />
+          ))}
+          {/* big text */}
+          <div className="absolute inset-x-0 top-[14%] text-center">
+            <span className="font-arcade chaos-drop-text text-3xl md:text-5xl">БЕЗУМИЕ ×2</span>
+            <p className="font-jp mt-2 text-[15px] tracking-[0.3em] text-[#ffd9b8]" style={{ textShadow: "0 0 12px rgba(255,120,40,0.9)" }}>
+              無茶苦茶モード
+            </p>
           </div>
         </div>
       )}
