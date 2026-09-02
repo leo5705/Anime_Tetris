@@ -20,6 +20,7 @@ const CROWD_URL =
 
 const YT_VIDEO_ID = "J7NFL-eOxiQ";
 const DROP_AT = 62.6; // 1:03 «Династии»
+const CHAOS_DURATION = 9999; // безумие до конца песни
 
 /* ---------- YouTube IFrame API ---------- */
 interface YTPlayer {
@@ -681,7 +682,7 @@ export default function App() {
         const tt = p.getCurrentTime() ?? 0;
         let prev = lastYtRef.current;
         if (tt < prev - 2) prev = 0; // трек начался заново
-        if (prev < DROP_AT && tt >= DROP_AT) gameRef.current?.triggerChaos();
+        if (prev < DROP_AT && tt >= DROP_AT) gameRef.current?.triggerChaos(CHAOS_DURATION);
         lastYtRef.current = tt;
       } catch {
         /* ignore */
@@ -1280,16 +1281,42 @@ export default function App() {
             <div className="crowd-band crowd-b" style={{ backgroundImage: `url(${CROWD_URL})` }} />
             <div className="crowd-band crowd-a" style={{ backgroundImage: `url(${CROWD_URL})` }} />
           </div>
-          {/* flying girls */}
+          {/* flying girls - running everywhere */}
           {FLYERS.map((f, i) => (
             <img
               key={i}
               src={f.src}
               alt=""
               draggable={false}
-              className="chaos-flyer"
+              className="chaos-flyer chaos-flyer-run"
               style={{ top: f.top, animationDelay: f.delay, animationDuration: f.dur }}
             />
+          ))}
+          {/* shooter girls with guns - more of them, shooting randomly */}
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div
+              key={`shooter-${i}`}
+              className="chaos-shooter"
+              style={{
+                left: `${Math.random() * 100}%`,
+                top: `${Math.random() * 80}%`,
+                animationDelay: `${-Math.random() * 5}s`,
+                animationDuration: `${2 + Math.random() * 2}s`,
+              } as React.CSSProperties}
+            >
+              <img
+                src={SHOOTER_URL}
+                alt=""
+                draggable={false}
+                className="chaos-shooter-img"
+              />
+              <div
+                className="chaos-muzzle"
+                style={{
+                  animationDelay: `${Math.random() * 0.5}s`,
+                } as React.CSSProperties}
+              />
+            </div>
           ))}
           {/* big text */}
           <div className="absolute inset-x-0 top-[14%] text-center">
@@ -1297,6 +1324,14 @@ export default function App() {
             <p className="font-jp mt-2 text-[15px] tracking-[0.3em] text-[#ffd9b8]" style={{ textShadow: "0 0 12px rgba(255,120,40,0.9)" }}>
               無茶苦茶モード
             </p>
+          </div>
+          {/* lyrics / screaming text */}
+          <div className="absolute inset-x-0 top-[35%] text-center">
+            <span className="font-arcade chaos-scream text-2xl md:text-4xl block animate-pulse">ДИНАСТИЯЯЯЯЯЯЯ</span>
+            <span className="font-arcade chaos-lyric text-lg md:text-xl block mt-2">ПЕРВЫЙ МИЛИОН</span>
+            <span className="font-arcade chaos-lyric text-lg md:text-xl block">Я ПЕРВЫЙ ЧЕМПИОН</span>
+            <span className="font-arcade chaos-lyric text-lg md:text-xl block mt-3 text-[#ff5c7a]">ЛЮБЛЮ МОСКВУ</span>
+            <span className="font-arcade chaos-lyric text-sm md:text-base block text-[#ff8f2d]">НО ЗА*БАЛИ ВСЕ МОСКОВСКИЕ Ш*ЛАВЫ</span>
           </div>
         </div>
       )}
